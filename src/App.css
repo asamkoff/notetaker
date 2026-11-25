@@ -138,6 +138,10 @@
   padding: 12px;
   margin-top: 14px;
   font-size: 13px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 240px;
+  overflow-y: auto;
 }
 
 .settings-grid {

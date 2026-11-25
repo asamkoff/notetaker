@@ -45,6 +45,19 @@ const MODEL_URLS: Record<WhisperModel, string> = {
 const SAMPLE_RATE = 16_000
 const MAX_AUDIO_SECONDS = 120
 
+function describeError(error: unknown) {
+  if (error instanceof Error) {
+    return error.stack ?? `${error.name}: ${error.message}`
+  }
+  if (typeof error === 'string') return error
+
+  try {
+    return JSON.stringify(error) ?? String(error)
+  } catch {
+    return String(error)
+  }
+}
+
 function loadWhisperModule() {
   if (window.whisperModulePromise) return window.whisperModulePromise
 
@@ -195,16 +208,19 @@ function App() {
     setTranscript('')
     setProgress(0)
     setIsTranscribing(true)
+    let phase = 'Checking browser isolation'
 
     try {
       if (!crossOriginIsolated) {
         throw new Error('This browser could not enable the threaded WASM runtime. Reload the page and try again.')
       }
 
+      phase = 'Decoding audio'
       setStatus('Preparing audio locally')
       const audio = await decodeAudio(selectedFile)
       setProgress(10)
 
+      phase = 'Loading Whisper WASM'
       setStatus('Loading whisper.cpp')
       const whisper = await loadWhisperModule()
       if (
@@ -220,10 +236,13 @@ function App() {
       }
 
       if (loadedModel.current !== model) {
+        phase = `Downloading the ${model} model`
         setStatus(`Downloading the ${model} model`)
         const modelBytes = await downloadModel(model, setProgress)
         setProgress(40)
 
+        phase = 'Initializing the Whisper model'
+        setStatus(phase)
         if (whisperInstance.current !== null) {
           whisper.free?.(whisperInstance.current)
           whisperInstance.current = null
@@ -241,16 +260,19 @@ function App() {
       if (instance === null) throw new Error('The Whisper model is not initialized.')
 
       setProgress(50)
+      phase = 'Starting transcription'
       setStatus('Transcribing locally; this may take a while')
       const result = whisper.full_default(instance, audio, 'pl', 4, false)
       if (result !== 0) {
         throw new Error(`Whisper could not start transcription (error ${result}).`)
       }
 
+      phase = 'Waiting for transcription'
       while (whisper.is_processing()) {
         await new Promise((resolve) => window.setTimeout(resolve, 250))
       }
 
+      phase = 'Reading transcription result'
       const transcriptionStatus = whisper.get_status()
       if (transcriptionStatus !== 0) {
         throw new Error(`Whisper transcription failed (error ${transcriptionStatus}).`)
@@ -263,11 +285,23 @@ function App() {
       setProgress(100)
       setStatus('Transcription complete')
     } catch (transcriptionError) {
-      setError(
-        transcriptionError instanceof Error
-          ? transcriptionError.message
-          : 'Transcription failed unexpectedly.'
-      )
+      const errorDetails = describeError(transcriptionError)
+      const diagnostics = {
+        phase,
+        model,
+        crossOriginIsolated: window.crossOriginIsolated,
+        serviceWorkerControlsPage: Boolean(navigator.serviceWorker?.controller),
+        userAgent: navigator.userAgent,
+      }
+      console.error('Transcription failed', { error: transcriptionError, ...diagnostics })
+      setError([
+        `Transcription failed during: ${phase}`,
+        errorDetails,
+        `Model: ${model}`,
+        `Cross-origin isolated: ${String(diagnostics.crossOriginIsolated)}`,
+        `Service worker controls page: ${diagnostics.serviceWorkerControlsPage}`,
+        `Browser: ${diagnostics.userAgent}`,
+      ].join('\n'))
       setStatus('Transcription failed')
     } finally {
       setIsTranscribing(false)
