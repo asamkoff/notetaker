@@ -1,121 +1,269 @@
-import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
+
+import { useRef, useState } from 'react'
 import './App.css'
 
+type WhisperModel = 'tiny' | 'base' | 'small'
+
 function App() {
-  const [count, setCount] = useState(0)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const [file, setFile] = useState<File | null>(null)
+  const [model, setModel] = useState<WhisperModel>('base')
+  const [transcript, setTranscript] = useState('')
+  const [progress, setProgress] = useState(0)
+  const [status, setStatus] = useState('Waiting for an audio file')
+  const [error, setError] = useState('')
+
+  const MAX_FILE_SIZE = 100 * 1024 * 1024
+
+  function handleFileChange(
+    event: React.ChangeEvent<HTMLInputElement>
+  ) {
+    const selectedFile = event.target.files?.[0]
+
+    setError('')
+    setProgress(0)
+    setTranscript('')
+    setStatus('Waiting for an audio file')
+
+    if (!selectedFile) return
+
+    const extension = selectedFile.name
+      .split('.')
+      .pop()
+      ?.toLowerCase()
+
+    if (!['m4a', 'wav'].includes(extension ?? '')) {
+      setError('Please select an M4A or WAV audio file.')
+      setFile(null)
+      event.target.value = ''
+      return
+    }
+
+    if (selectedFile.size > MAX_FILE_SIZE) {
+      setError('The selected file exceeds the 100 MB limit.')
+      setFile(null)
+      event.target.value = ''
+      return
+    }
+
+    if (selectedFile.size === 0) {
+      setError('The selected file is empty.')
+      setFile(null)
+      event.target.value = ''
+      return
+    }
+
+    setFile(selectedFile)
+    setStatus('File ready for transcription')
+  }
+
+  function handleStart() {
+    if (!file) return
+
+    setError(
+      'The transcription engine will be connected in a later development stage.'
+    )
+  }
+
+  async function handleCopy() {
+    if (!transcript.trim()) return
+
+    try {
+      await navigator.clipboard.writeText(transcript)
+      setStatus('Transcript copied to clipboard')
+    } catch {
+      setError('Unable to access the clipboard.')
+    }
+  }
+
+  function handleDownload() {
+    if (!transcript.trim()) return
+
+    const blob = new Blob(
+      [transcript],
+      { type: 'text/plain;charset=utf-8' }
+    )
+
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+
+    link.href = url
+    link.download = 'polish-transcript.txt'
+    link.click()
+
+    URL.revokeObjectURL(url)
+  }
+
+  function formatFileSize(bytes: number) {
+    return bytes < 1024 * 1024
+      ? `${(bytes / 1024).toFixed(1)} KB`
+      : `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  }
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
+    <main className="app-container">
+      <header className="app-header">
+        <div className="logo">🎙️</div>
         <div>
-          <h1>Get started</h1>
+          <h1>Polish Speech Transcriber</h1>
           <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
+            Private speech transcription directly on your device.
           </p>
         </div>
+      </header>
+
+      <div className="privacy-notice">
+        <span>🔒</span>
+        <div>
+          <strong>Your privacy matters</strong>
+          <p>
+            Local processing is the goal. Audio will not be
+            uploaded to external servers.
+          </p>
+        </div>
+      </div>
+
+      <section className="panel">
+        <h2>1. Select an audio recording</h2>
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".m4a,.wav,audio/mp4,audio/wav,audio/x-wav"
+          onChange={handleFileChange}
+          hidden
+        />
+
         <button
+          className="file-button"
+          onClick={() => fileInputRef.current?.click()}
           type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
         >
-          Count is {count}
+          <span className="file-icon">📁</span>
+          <strong>Choose audio file</strong>
+          <span>M4A or WAV · Maximum 100 MB</span>
         </button>
+
+        {file && (
+          <div className="file-info">
+            <span>🎵</span>
+            <div className="file-details">
+              <strong>{file.name}</strong>
+              <span>{formatFileSize(file.size)}</span>
+            </div>
+            <span className="ready-label">Ready</span>
+          </div>
+        )}
+
+        {error && (
+          <div className="error-message" role="alert">
+            {error}
+          </div>
+        )}
       </section>
 
-      <div className="ticks"></div>
+      <section className="panel">
+        <h2>2. Transcription settings</h2>
 
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
+        <div className="settings-grid">
+          <div className="setting">
+            <label htmlFor="language">Language</label>
+            <select id="language" value="pl" disabled>
+              <option value="pl">Polish</option>
+            </select>
+          </div>
+
+          <div className="setting">
+            <label htmlFor="model">Whisper model</label>
+            <select
+              id="model"
+              value={model}
+              onChange={(event) =>
+                setModel(event.target.value as WhisperModel)
+              }
+            >
+              <option value="tiny">Tiny – fastest</option>
+              <option value="base">Base – recommended</option>
+              <option value="small">Small – better quality</option>
+            </select>
+          </div>
         </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
+
+        <button
+          className="start-button"
+          disabled={!file}
+          onClick={handleStart}
+          type="button"
+        >
+          ▶ Start transcription
+        </button>
+
+        <p className="helper-text">
+          The transcription engine is not connected yet.
+        </p>
+      </section>
+
+      <section className="panel">
+        <h2>3. Transcription progress</h2>
+
+        <div className="progress-info">
+          <span>{status}</span>
+          <strong>{progress}%</strong>
+        </div>
+
+        <div
+          className="progress-track"
+          role="progressbar"
+          aria-valuenow={progress}
+          aria-valuemin={0}
+          aria-valuemax={100}
+        >
+          <div
+            className="progress-fill"
+            style={{ width: `${progress}%` }}
+          />
         </div>
       </section>
 
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
+      <section className="panel">
+        <h2>4. Transcription result</h2>
+
+        <textarea
+          className="transcript-area"
+          placeholder="Your Polish transcription will appear here. You can also edit the text manually."
+          value={transcript}
+          onChange={(event) => setTranscript(event.target.value)}
+          spellCheck
+          lang="pl"
+        />
+
+        <div className="result-actions">
+          <button
+            className="secondary-button"
+            onClick={handleCopy}
+            disabled={!transcript.trim()}
+            type="button"
+          >
+            📋 Copy transcript
+          </button>
+
+          <button
+            className="secondary-button"
+            onClick={handleDownload}
+            disabled={!transcript.trim()}
+            type="button"
+          >
+            ⬇ Download TXT
+          </button>
+        </div>
+      </section>
+
+      <footer>
+        <p>Polish Speech Transcriber</p>
+        <span>Designed for private, local speech recognition.</span>
+      </footer>
+    </main>
   )
 }
 
