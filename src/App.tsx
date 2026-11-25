@@ -153,6 +153,7 @@ function App() {
   const [isTranscribing, setIsTranscribing] = useState(false)
   const whisperInstance = useRef<number | null>(null)
   const loadedModel = useRef<WhisperModel | null>(null)
+  const modelFilePresent = useRef(false)
 
   const MAX_FILE_SIZE = 100 * 1024 * 1024
 
@@ -247,8 +248,12 @@ function App() {
           whisper.free?.(whisperInstance.current)
           whisperInstance.current = null
         }
-        whisper.FS_unlink('whisper.bin')
+        if (modelFilePresent.current) {
+          whisper.FS_unlink('whisper.bin')
+          modelFilePresent.current = false
+        }
         whisper.FS_createDataFile('/', 'whisper.bin', modelBytes, true, true)
+        modelFilePresent.current = true
         const instance = whisper.init('whisper.bin')
         if (!instance) throw new Error('Unable to initialize the Whisper model.')
 
