@@ -109,9 +109,13 @@ EMSCRIPTEN_BINDINGS(whisper) {
             return 0;
         }));
 
-    emscripten::function("is_processing", []() {
+    emscripten::function("is_processing", emscripten::optional_override([]() {
         return g_processing.load(std::memory_order_acquire);
-    });
-    emscripten::function("get_result", []() { return g_result; });
-    emscripten::function("get_status", []() { return g_status; });
+    }));
+    emscripten::function("get_result", emscripten::optional_override([]() {
+        return g_result;
+    }));
+    emscripten::function("get_status", emscripten::optional_override([]() {
+        return g_status;
+    }));
 }
