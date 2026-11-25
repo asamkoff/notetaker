@@ -28,17 +28,41 @@ jobs:
       - name: Download repository
         uses: actions/checkout@v4
 
+      - name: Download whisper.cpp
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/whisper.cpp
+          ref: v1.9.6
+          path: whisper.cpp
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
 
+      - name: Set up Emscripten
+        uses: emscripten-core/setup-emsdk@v14
+        with:
+          version: '7.0.0'
+
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Build application
         run: npm run build
+
+      - name: Build whisper.cpp for the browser
+        run: |
+          cp wasm/emscripten.cpp whisper.cpp/examples/whisper.wasm/emscripten.cpp
+          emcmake cmake -S whisper.cpp -B whisper.cpp/build \
+            -DWHISPER_BUILD_TESTS=OFF \
+            -DWHISPER_BUILD_EXAMPLES=ON \
+            -DWHISPER_BUILD_SERVER=OFF \
+            -DWHISPER_WASM_SINGLE_FILE=ON
+          cmake --build whisper.cpp/build --config Release --target libmain --parallel 2
+          mkdir -p dist/whisper
+          cp whisper.cpp/build/bin/whisper.wasm/main.js dist/whisper/main.js
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5

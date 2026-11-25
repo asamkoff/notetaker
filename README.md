@@ -1,32 +1,28 @@
-# React + TypeScript + Vite
+# Polish Speech Transcriber
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+A static React application that transcribes Polish audio in the browser using
+[whisper.cpp](https://github.com/ggml-org/whisper.cpp)'s WebAssembly build.
+Audio is decoded and processed locally; model files are downloaded from
+[Hugging Face](https://huggingface.co/ggerganov/whisper.cpp) when first needed.
 
-Currently, two official plugins are available:
+## Run locally
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```sh
+npm ci
+npm run dev
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+The development server serves the UI, but does not build the whisper.cpp
+runtime. Transcription is available on the GitHub Pages deployment.
+
+## Deployment
+
+The `Deploy Polish Speech Transcriber` workflow builds the app and compiles
+whisper.cpp v1.9.6 with Emscripten before publishing to GitHub Pages. The
+runtime is generated as part of the workflow and is not checked into the repo.
+GitHub Pages must use **GitHub Actions** as its deployment source.
+
+On first use, the selected quantized model is downloaded and cached by the
+browser where supported. The Tiny model is about 31 MB; Base and Small provide
+higher quality at larger download sizes. Audio is limited to 2 minutes and 100
+MB. Browser support for WebAssembly SIMD and cross-origin isolation is required.

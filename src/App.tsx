@@ -4,15 +4,142 @@ import './App.css'
 
 type WhisperModel = 'tiny' | 'base' | 'small'
 
+type WhisperModule = {
+  onRuntimeInitialized?: () => void
+  onAbort?: (reason: string) => void
+  init?: (modelPath: string) => number
+  free?: (instance: number) => void
+  full_default?: (
+    instance: number,
+    audio: Float32Array,
+    language: string,
+    threads: number,
+    translate: boolean
+  ) => number
+  is_processing?: () => boolean
+  get_result?: () => string
+  get_status?: () => number
+  FS_createDataFile?: (
+    parent: string,
+    name: string,
+    data: Uint8Array,
+    canRead: boolean,
+    canWrite: boolean
+  ) => void
+  FS_unlink?: (path: string) => void
+}
+
+declare global {
+  interface Window {
+    Module?: WhisperModule
+    whisperModulePromise?: Promise<WhisperModule>
+  }
+}
+
+const MODEL_URLS: Record<WhisperModel, string> = {
+  tiny: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny-q5_1.bin',
+  base: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin',
+  small: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin',
+}
+
+const SAMPLE_RATE = 16_000
+const MAX_AUDIO_SECONDS = 120
+
+function loadWhisperModule() {
+  if (window.whisperModulePromise) return window.whisperModulePromise
+
+  window.whisperModulePromise = new Promise<WhisperModule>((resolve, reject) => {
+    const fail = (reason: string) => {
+      window.whisperModulePromise = undefined
+      reject(new Error(reason))
+    }
+    const module: WhisperModule = {
+      onRuntimeInitialized: () => resolve(module),
+      onAbort: (reason) => fail(`Whisper WASM failed: ${reason}`),
+    }
+
+    window.Module = module
+    const script = document.createElement('script')
+    script.src = `${import.meta.env.BASE_URL}whisper/main.js`
+    script.onerror = () => {
+      script.remove()
+      fail('Unable to load the whisper.cpp runtime.')
+    }
+    document.body.appendChild(script)
+  })
+
+  return window.whisperModulePromise
+}
+
+async function downloadModel(
+  model: WhisperModel,
+  onProgress: (progress: number) => void
+) {
+  const response = await fetch(MODEL_URLS[model], { cache: 'force-cache' })
+  if (!response.ok || !response.body) {
+    throw new Error(`Unable to download the ${model} Whisper model.`)
+  }
+
+  const contentLength = Number(response.headers.get('content-length'))
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let received = 0
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    chunks.push(value)
+    received += value.length
+
+    if (Number.isFinite(contentLength) && contentLength > 0) {
+      onProgress(Math.round((received / contentLength) * 40))
+    }
+  }
+
+  const bytes = new Uint8Array(received)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.length
+  }
+  return bytes
+}
+
+async function decodeAudio(file: File) {
+  const context = new AudioContext()
+  try {
+    const decoded = await context.decodeAudioData(await file.arrayBuffer())
+    if (decoded.duration > MAX_AUDIO_SECONDS) {
+      throw new Error(`Audio must be ${MAX_AUDIO_SECONDS} seconds or shorter.`)
+    }
+
+    const offline = new OfflineAudioContext(
+      1,
+      Math.ceil(decoded.duration * SAMPLE_RATE),
+      SAMPLE_RATE
+    )
+    const source = offline.createBufferSource()
+    source.buffer = decoded
+    source.connect(offline.destination)
+    source.start()
+    return (await offline.startRendering()).getChannelData(0)
+  } finally {
+    await context.close()
+  }
+}
+
 function App() {
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const [file, setFile] = useState<File | null>(null)
-  const [model, setModel] = useState<WhisperModel>('base')
+  const [model, setModel] = useState<WhisperModel>('tiny')
   const [transcript, setTranscript] = useState('')
   const [progress, setProgress] = useState(0)
   const [status, setStatus] = useState('Waiting for an audio file')
   const [error, setError] = useState('')
+  const [isTranscribing, setIsTranscribing] = useState(false)
+  const whisperInstance = useRef<number | null>(null)
+  const loadedModel = useRef<WhisperModel | null>(null)
 
   const MAX_FILE_SIZE = 100 * 1024 * 1024
 
@@ -33,8 +160,8 @@ function App() {
       .pop()
       ?.toLowerCase()
 
-    if (!['m4a', 'wav'].includes(extension ?? '')) {
-      setError('Please select an M4A or WAV audio file.')
+    if (!['m4a', 'wav', 'mp3', 'ogg', 'webm'].includes(extension ?? '')) {
+      setError('Please select a supported audio file (M4A, WAV, MP3, OGG, or WebM).')
       setFile(null)
       event.target.value = ''
       return
@@ -59,11 +186,92 @@ function App() {
   }
 
   function handleStart() {
-    if (!file) return
+    if (!file || isTranscribing) return
+    void transcribe(file)
+  }
 
-    setError(
-      'The transcription engine will be connected in a later development stage.'
-    )
+  async function transcribe(selectedFile: File) {
+    setError('')
+    setTranscript('')
+    setProgress(0)
+    setIsTranscribing(true)
+
+    try {
+      if (!crossOriginIsolated) {
+        throw new Error('This browser could not enable the threaded WASM runtime. Reload the page and try again.')
+      }
+
+      setStatus('Preparing audio locally')
+      const audio = await decodeAudio(selectedFile)
+      setProgress(10)
+
+      setStatus('Loading whisper.cpp')
+      const whisper = await loadWhisperModule()
+      if (
+        !whisper.init ||
+        !whisper.full_default ||
+        !whisper.is_processing ||
+        !whisper.get_result ||
+        !whisper.get_status ||
+        !whisper.FS_createDataFile ||
+        !whisper.FS_unlink
+      ) {
+        throw new Error('The whisper.cpp runtime is missing required functions.')
+      }
+
+      if (loadedModel.current !== model) {
+        setStatus(`Downloading the ${model} model`)
+        const modelBytes = await downloadModel(model, setProgress)
+        setProgress(40)
+
+        if (whisperInstance.current !== null) {
+          whisper.free?.(whisperInstance.current)
+          whisperInstance.current = null
+        }
+        whisper.FS_unlink('whisper.bin')
+        whisper.FS_createDataFile('/', 'whisper.bin', modelBytes, true, true)
+        const instance = whisper.init('whisper.bin')
+        if (!instance) throw new Error('Unable to initialize the Whisper model.')
+
+        whisperInstance.current = instance
+        loadedModel.current = model
+      }
+
+      const instance = whisperInstance.current
+      if (instance === null) throw new Error('The Whisper model is not initialized.')
+
+      setProgress(50)
+      setStatus('Transcribing locally; this may take a while')
+      const result = whisper.full_default(instance, audio, 'pl', 4, false)
+      if (result !== 0) {
+        throw new Error(`Whisper could not start transcription (error ${result}).`)
+      }
+
+      while (whisper.is_processing()) {
+        await new Promise((resolve) => window.setTimeout(resolve, 250))
+      }
+
+      const transcriptionStatus = whisper.get_status()
+      if (transcriptionStatus !== 0) {
+        throw new Error(`Whisper transcription failed (error ${transcriptionStatus}).`)
+      }
+
+      const text = whisper.get_result().trim()
+      if (!text) throw new Error('No speech was recognized in this recording.')
+
+      setTranscript(text)
+      setProgress(100)
+      setStatus('Transcription complete')
+    } catch (transcriptionError) {
+      setError(
+        transcriptionError instanceof Error
+          ? transcriptionError.message
+          : 'Transcription failed unexpectedly.'
+      )
+      setStatus('Transcription failed')
+    } finally {
+      setIsTranscribing(false)
+    }
   }
 
   async function handleCopy() {
@@ -118,8 +326,8 @@ function App() {
         <div>
           <strong>Your privacy matters</strong>
           <p>
-            Local processing is the goal. Audio will not be
-            uploaded to external servers.
+            Audio is transcribed on this device and is not uploaded. The selected
+            Whisper model is downloaded from Hugging Face on first use.
           </p>
         </div>
       </div>
@@ -130,7 +338,7 @@ function App() {
         <input
           ref={fileInputRef}
           type="file"
-          accept=".m4a,.wav,audio/mp4,audio/wav,audio/x-wav"
+          accept=".m4a,.wav,.mp3,.ogg,.webm,audio/*"
           onChange={handleFileChange}
           hidden
         />
@@ -142,7 +350,7 @@ function App() {
         >
           <span className="file-icon">📁</span>
           <strong>Choose audio file</strong>
-          <span>M4A or WAV · Maximum 100 MB</span>
+          <span>Audio file · Maximum 100 MB · Up to 2 minutes</span>
         </button>
 
         {file && (
@@ -179,6 +387,7 @@ function App() {
             <select
               id="model"
               value={model}
+              disabled={isTranscribing}
               onChange={(event) =>
                 setModel(event.target.value as WhisperModel)
               }
@@ -192,15 +401,16 @@ function App() {
 
         <button
           className="start-button"
-          disabled={!file}
+          disabled={!file || isTranscribing}
           onClick={handleStart}
           type="button"
         >
-          ▶ Start transcription
+          {isTranscribing ? 'Transcribing…' : '▶ Start transcription'}
         </button>
 
         <p className="helper-text">
-          The transcription engine is not connected yet.
+          Runs locally in your browser with whisper.cpp. Model downloads are
+          cached by your browser when possible.
         </p>
       </section>
 
