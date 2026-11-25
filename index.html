@@ -9,6 +9,12 @@
       content="Transcribe Polish recordings locally in your browser with whisper.cpp."
     />
     <title>Polish Speech Transcriber</title>
+    <script>
+      window.coi = {
+        coepCredentialless: () => false,
+        coepDegrade: () => false,
+      }
+    </script>
     <script src="%BASE_URL%coi-serviceworker.js"></script>
   </head>
   <body>
